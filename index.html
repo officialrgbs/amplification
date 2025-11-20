@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Class D Amplifier Visualizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        canvas { background-color: #1e293b; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); width: 100%; height: auto; }
+        .slider-group { margin-bottom: 1.5rem; }
+        .slider-label { display: flex; justify-content: space-between; font-size: 0.875rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.5rem; }
+        input[type=range] { width: 100%; height: 6px; background: #334155; border-radius: 99px; appearance: none; outline: none; }
+        input[type=range]::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #38bdf8; cursor: pointer; transition: all .15s ease; box-shadow: 0 0 10px rgba(56, 189, 248, 0.5); }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.1); background: #0ea5e9; }
+        .graph-header { display: flex; align-items: center; margin-bottom: 0.5rem; }
+        .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-right: 8px; }
+    </style>
+</head>
+<body class="p-4 md:p-8 flex flex-col items-center min-h-screen">
+
+    <div class="max-w-5xl w-full">
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-sky-400 mb-2 tracking-tight">Class D Amplifier Logic</h1>
+            <p class="text-slate-400">See how a jagged digital pulse becomes smooth audio.</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+            
+            <!-- Controls Panel -->
+            <div class="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 backdrop-blur-sm h-fit">
+                <h2 class="text-xl font-semibold text-white mb-6 border-b border-slate-700 pb-2">Controls</h2>
+                
+                <div class="slider-group">
+                    <div class="slider-label"><span>Audio Input</span> <span id="audioVal" class="text-green-400">2 Hz</span></div>
+                    <input type="range" id="audioFreq" min="0.5" max="4" step="0.1" value="1.5">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label"><span>Carrier Speed (Switching)</span> <span id="carrierVal" class="text-red-400">30 Hz</span></div>
+                    <input type="range" id="carrierFreq" min="10" max="80" step="1" value="40">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label"><span>Filter Strength (Capacitor)</span> <span id="filterVal" class="text-yellow-400">Med</span></div>
+                    <input type="range" id="filterStr" min="0.01" max="0.3" step="0.01" value="0.08">
+                    <p class="text-xs text-slate-500 mt-2">Slide RIGHT to remove spikes (Ripple).</p>
+                </div>
+
+                <div class="mt-8 p-4 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-400 leading-relaxed">
+                    <strong class="text-white block mb-1">Why is this useful?</strong>
+                    The <strong>Green Line</strong> is your music. The <strong>Blue Pulses</strong> are what the amplifier actually sends. The <strong>Yellow Line</strong> is what you hear. Adjust the filter to see how we clean up the digital noise.
+                </div>
+            </div>
+
+            <!-- Visualization Panel -->
+            <div class="lg:col-span-2 flex flex-col gap-6">
+                
+                <!-- Graph 1: Input -->
+                <div class="relative">
+                    <div class="graph-header">
+                        <span class="badge bg-slate-700 text-white">STEP 1</span>
+                        <span class="text-sm font-medium text-slate-300">Comparison (Input vs Carrier)</span>
+                    </div>
+                    <canvas id="inputCanvas" width="800" height="200"></canvas>
+                </div>
+
+                <!-- Graph 2: PWM -->
+                <div class="relative">
+                    <div class="graph-header">
+                        <span class="badge bg-blue-900 text-blue-200">STEP 2</span>
+                        <span class="text-sm font-medium text-slate-300">Switching Output (PWM)</span>
+                    </div>
+                    <canvas id="pwmCanvas" width="800" height="120"></canvas>
+                </div>
+
+                <!-- Graph 3: Output -->
+                <div class="relative">
+                    <div class="graph-header">
+                        <span class="badge bg-yellow-900 text-yellow-200">STEP 3</span>
+                        <span class="text-sm font-medium text-slate-300">Filtered Output (Speaker Motion)</span>
+                    </div>
+                    <canvas id="filterCanvas" width="800" height="200"></canvas>
+                </div>
+
+                <!-- Legend -->
+                <div class="flex flex-wrap justify-center gap-6 text-xs font-medium text-slate-400 mt-2">
+                    <div class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Audio (Target)</div>
+                    <div class="flex items-center"><div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>Carrier (Triangle)</div>
+                    <div class="flex items-center"><div class="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>PWM (Digital)</div>
+                    <div class="flex items-center"><div class="w-2 h-2 bg-yellow-400 rounded-full mr-2"></div>Reconstructed (Actual)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Canvas Setup
+        const inputCanvas = document.getElementById('inputCanvas');
+        const pwmCanvas = document.getElementById('pwmCanvas');
+        const filterCanvas = document.getElementById('filterCanvas');
+        
+        const ctxIn = inputCanvas.getContext('2d');
+        const ctxPwm = pwmCanvas.getContext('2d');
+        const ctxFilter = filterCanvas.getContext('2d');
+
+        // Controls
+        const audioFreqSlider = document.getElementById('audioFreq');
+        const carrierFreqSlider = document.getElementById('carrierFreq');
+        const filterStrSlider = document.getElementById('filterStr');
+
+        // Labels
+        const audioVal = document.getElementById('audioVal');
+        const carrierVal = document.getElementById('carrierVal');
+        const filterVal = document.getElementById('filterVal');
+
+        let time = 0;
+        let currentFilterY = 0; // Filter state
+
+        // Handle High DPI Displays (Retina)
+        function resizeCanvas(canvas) {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * 2;
+            canvas.height = rect.height * 2;
+            const ctx = canvas.getContext('2d');
+            ctx.scale(2, 2);
+            return { width: rect.width, height: rect.height };
+        }
+
+        let dimsIn = resizeCanvas(inputCanvas);
+        let dimsPwm = resizeCanvas(pwmCanvas);
+        let dimsFil = resizeCanvas(filterCanvas);
+
+        window.addEventListener('resize', () => {
+            dimsIn = resizeCanvas(inputCanvas);
+            dimsPwm = resizeCanvas(pwmCanvas);
+            dimsFil = resizeCanvas(filterCanvas);
+        });
+
+        function draw() {
+            // Update Labels
+            audioVal.innerText = audioFreqSlider.value + " Hz";
+            carrierVal.innerText = carrierFreqSlider.value + " Hz";
+            let fVal = parseFloat(filterStrSlider.value);
+            filterVal.innerText = fVal < 0.05 ? "Weak (Spiky)" : (fVal > 0.15 ? "Strong (Clean)" : "Medium");
+
+            // Params
+            const audioFreq = parseFloat(audioFreqSlider.value);
+            const carrierFreq = parseFloat(carrierFreqSlider.value);
+            
+            // Reversing slider logic: Right (Max slider) = Low Alpha (Clean). Left (Min Slider) = High Alpha (Spiky).
+            const rawSlider = parseFloat(filterStrSlider.value); 
+            const alpha = 0.31 - rawSlider; 
+
+            const width = dimsIn.width;
+            const height = dimsIn.height;
+            const pwmHeight = dimsPwm.height;
+
+            // Clear
+            ctxIn.clearRect(0, 0, width, height);
+            ctxPwm.clearRect(0, 0, width, pwmHeight);
+            ctxFilter.clearRect(0, 0, width, height);
+
+            // Center Lines
+            [ctxIn, ctxPwm, ctxFilter].forEach(ctx => {
+                ctx.strokeStyle = '#334155';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, ctx == ctxPwm ? pwmHeight/2 : height/2);
+                ctx.lineTo(width, ctx == ctxPwm ? pwmHeight/2 : height/2);
+                ctx.stroke();
+            });
+
+            ctxIn.lineWidth = 2;
+            ctxPwm.lineWidth = 2;
+            ctxFilter.lineWidth = 3;
+
+            // Logic Loop
+            let prevPwmY = 0;
+            let simFilterVal = 0; // Reset simulation filter for the visual frame
+
+            ctxIn.beginPath();
+            ctxIn.strokeStyle = '#ef4444'; // Red Triangle
+            
+            // Draw Triangle
+            for (let x = 0; x < width; x++) {
+                let t = (x + time) * carrierFreq * 0.001;
+                let tri = 2 * Math.abs(2 * (t - Math.floor(t + 0.5))) - 1;
+                let y = (height / 2) - (tri * (height / 2.5));
+                if (x === 0) ctxIn.moveTo(x, y); else ctxIn.lineTo(x, y);
+            }
+            ctxIn.stroke();
+
+            // Draw Audio
+            ctxIn.beginPath();
+            ctxIn.strokeStyle = '#22c55e'; // Green Audio
+            for (let x = 0; x < width; x++) {
+                let t = (x + time) * audioFreq * 0.001;
+                let sine = Math.sin(t);
+                let y = (height / 2) - (sine * (height / 2.5) * 0.8); // 0.8 amp
+                if (x === 0) ctxIn.moveTo(x, y); else ctxIn.lineTo(x, y);
+            }
+            ctxIn.stroke();
+
+            // PWM & Filter
+            ctxPwm.beginPath();
+            ctxPwm.strokeStyle = '#3b82f6'; // Blue
+            ctxFilter.beginPath();
+            ctxFilter.strokeStyle = '#facc15'; // Yellow
+
+            for (let x = 0; x < width; x++) {
+                // Recompute inputs at this pixel
+                let tTri = (x + time) * carrierFreq * 0.001;
+                let tri = 2 * Math.abs(2 * (tTri - Math.floor(tTri + 0.5))) - 1;
+                
+                let tAudio = (x + time) * audioFreq * 0.001;
+                let sine = Math.sin(tAudio) * 0.8;
+
+                let isHigh = sine > tri;
+
+                // PWM Drawing
+                let pwmY = isHigh ? 10 : pwmHeight - 10;
+                if (x === 0) {
+                    ctxPwm.moveTo(x, pwmY);
+                } else {
+                    ctxPwm.lineTo(x, prevPwmY);
+                    ctxPwm.lineTo(x, pwmY);
+                }
+                prevPwmY = pwmY;
+
+                // Filter Simulation
+                let targetY = isHigh ? (height/2 - (height/2.5)) : (height/2 + (height/2.5));
+                
+                // Simple IIR Low Pass Filter
+                simFilterVal += (targetY - simFilterVal) * alpha;
+
+                if (x === 0) ctxFilter.moveTo(x, simFilterVal);
+                else ctxFilter.lineTo(x, simFilterVal);
+            }
+            ctxPwm.stroke();
+            ctxFilter.stroke();
+
+            // Draw Ghost Target (Green dashed on yellow graph)
+            ctxFilter.beginPath();
+            ctxFilter.setLineDash([5, 5]);
+            ctxFilter.strokeStyle = 'rgba(34, 197, 94, 0.4)';
+            ctxFilter.lineWidth = 2;
+            for (let x = 0; x < width; x++) {
+                let t = (x + time) * audioFreq * 0.001;
+                let sine = Math.sin(t) * 0.8;
+                let y = (height / 2) - (sine * (height / 2.5));
+                if (x === 0) ctxFilter.moveTo(x, y); else ctxFilter.lineTo(x, y);
+            }
+            ctxFilter.stroke();
+            ctxFilter.setLineDash([]);
+
+            time += 2; // Speed
+            requestAnimationFrame(draw);
+        }
+
+        draw();
+    </script>
+</body>
+</html>
